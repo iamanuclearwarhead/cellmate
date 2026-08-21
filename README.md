@@ -33,7 +33,7 @@ cellmate stats                     # fleet totals
 
 ## install
 
-### from the aur (arch btw)
+### from the aur (i use arch btw)
 
 ```bash
 yay -S cellmate-git
