@@ -1,17 +1,17 @@
-# cellmate
+# [cellmate](https://github.com/iamanuclearwarhead/cellmate)
 
-keep your lipos alive. a tiny cli to track your fpv battery fleet — cycles, internal resistance, flights, and which packs are getting puffy — before they let you down midair.
+keep your lipos alive.
 
-> no database, no cloud, no electron. just bash and two tsv files in `~/.local/share/cellmate/`
+a tiny cli tool to track your fpv batteries cycles, internal resistance, flights, and which ones are getting puffy before they explode midair.
 
 ## why
 
-lipos die quietly. cycles add up, internal resistance creeps, a pack sits fully charged for a week and swells. cellmate remembers all of it so you dont have to, and yells at you when a pack needs attention:
+lipos die quietly, cycles add up and the internal resistance increases. which is bad. cellmate remembers all of it and yells at you when a pack needs attention
 
-- `PUFFY` — you flagged it swollen
-- `high IR` / `IR rising` — worst cell over 15mΩ / 10mΩ
-- `sitting full Nd` — last event was a charge, 3+ days ago (storage charge your packs!!)
-- `150+ cycles` — its had a good life
+- `PUFFY`: you flagged it swollen
+- `high IR` or `IR rising`: cell over 15mΩ / 10mΩ
+- `sitting full Nd`: last event was a charge 3+ days ago
+- `150+ cycles`: its had a good life
 
 ## usage
 
@@ -39,22 +39,28 @@ install -Dm755 cellmate ~/.local/bin/cellmate
 
 > make sure `~/.local/bin` is on your `$PATH`
 
-tab completions for bash, zsh, and fish live in `completions/` — copy the one for your shell:
+tab completions for bash zsh and fish can be found in  `completions/` — copy the one for your shell:
 
 ```bash
 # fish
 cp completions/cellmate.fish ~/.config/fish/completions/
+
 # bash
 cp completions/cellmate.bash ~/.local/share/bash-completion/completions/cellmate
+
 # zsh: drop completions/_cellmate anywhere in your $fpath
 ```
 
 ## data
 
-everything lives in two greppable tsv files under `~/.local/share/cellmate/` (`packs.tsv` and `events.tsv`). back them up, sync them, `awk` them, whatever. no lock-in.
+everything is stored in two greppable tsv files under `~/.local/share/cellmate/` (`packs.tsv` and `events.tsv`). you can back them, up sync them, `awk` them
 
 ## license
 
-mit. [license](LICENSE) here
+mit. see [license](LICENSE) here
+
 made with <3 and shell
-fly safe, storage charge your packs
+
+fly safely
+
+dont be afraid to fork
