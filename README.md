@@ -1,10 +1,12 @@
 # [cellmate](https://github.com/iamanuclearwarhead/cellmate)
 
-keep your lipos alive.
+a tiny cli tool to track your fpv batteries cycles, resistance, flights, and which ones are getting puffy before they explode midair
 
-a tiny cli tool to track your fpv batteries cycles, internal resistance, flights, and which ones are getting puffy before they explode midair.
+> "i dont care, just take me to the [installs](#install)"
 
-## why
+pls dont explode them midair
+
+## why 
 
 lipos die quietly, cycles add up and the internal resistance increases. which is bad. cellmate remembers all of it and yells at you when a pack needs attention
 
