@@ -33,6 +33,16 @@ cellmate stats                     # fleet totals
 
 ## install
 
+### from the aur (arch btw)
+
+```bash
+yay -S cellmate-git
+```
+
+> tab completions for bash, zsh, and fish come with it
+
+### or manually
+
 ```bash
 git clone https://github.com/iamanuclearwarhead/cellmate
 cd cellmate
