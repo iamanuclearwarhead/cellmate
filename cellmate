@@ -8,6 +8,7 @@
 #  keep your lipos alive         by @iamanuclearwarhead
 #
 # usage
+#   cellmate                                      open the interactive tui
 #   cellmate add <pack> -s <cells> -c <mah> [-C <c-rating>] [-b <brand>]
 #   cellmate charge <pack>                        log a charge (counts a cycle)
 #   cellmate fly <pack> [minutes]                 log a flight
@@ -241,10 +242,235 @@ cmd_stats() {
     printf '  %-14s %s%s\n' "total flights" "$flights" "${mins:+ (${mins}min logged)}"
 }
 
+# ── tui ──────────────────────────────────────────────────────────────
+
+TUI_SEL=0
+TUI_ALL=0
+TUI_MSG=""
+T_NAMES=()
+OUT=""
+
+put() { local _p; printf -v _p '\033[%d;%dH' "$1" "$2"; OUT+="$_p$3"; }
+
+repeat() { local i s=""; for ((i = 0; i < $1; i++)); do s+="$2"; done; printf '%s' "$s"; }
+
+tui_load() {
+    T_NAMES=()
+    local name rest
+    while IFS=$'\t' read -r name rest; do
+        [ -z "$name" ] && continue
+        if [ "$TUI_ALL" = 1 ] || [ "$(pack_field "$name" 7)" != "retired" ]; then
+            T_NAMES+=("$name")
+        fi
+    done < "$PACKS"
+    if [ "${#T_NAMES[@]}" -eq 0 ]; then
+        TUI_SEL=0
+    elif [ "$TUI_SEL" -ge "${#T_NAMES[@]}" ]; then
+        TUI_SEL=$((${#T_NAMES[@]} - 1))
+    fi
+}
+
+tui_box() {  # top left bottom right title
+    local t=$1 l=$2 b=$3 r=$4 title=$5 i h
+    h="$(repeat $((r - l - 1)) '─')"
+    put "$t" "$l" "${DIM}╭${h}╮${RESET}"
+    for ((i = t + 1; i < b; i++)); do
+        put "$i" "$l" "${DIM}│${RESET}"
+        put "$i" "$r" "${DIM}│${RESET}"
+    done
+    put "$b" "$l" "${DIM}╰${h}╯${RESET}"
+    put "$t" $((l + 2)) "${BOLD} $title ${RESET}"
+}
+
+hint() { printf '%s' "${BOLD}${BLUE}$1${RESET}${DIM} $2${RESET}  "; }
+
+tui_draw() {
+    local ROWS COLS
+    ROWS=$(tput lines); COLS=$(tput cols)
+    OUT=$'\033[2J\033[?7l'
+    if [ "$ROWS" -lt 14 ] || [ "$COLS" -lt 64 ]; then
+        put 2 2 "terminal too smol, resize me"
+        put 3 2 "${DIM}(or press q to quit)${RESET}"
+        printf '%s' "$OUT"
+        return
+    fi
+    local top=3 bot=$((ROWS - 2)) lw=34
+    local dl=$((lw + 2)) c=$((lw + 4))
+
+    local stats
+    stats="$(awk -F'\t' '{t++} $7=="retired"{r++} END{printf "%d active / %d retired", t-r, r}' "$PACKS")"
+    put 1 2 "${BOLD}${YELLOW}⚡ cellmate${RESET}"
+    put 1 $((COLS - ${#stats} - 1)) "${DIM}${stats}${RESET}"
+
+    tui_box "$top" 1 "$bot" "$lw" "packs$( [ "$TUI_ALL" = 1 ] && printf '%s' ' +retired' )"
+    tui_box "$top" "$dl" "$bot" "$COLS" "details"
+
+    # pack list
+    local cap=$((bot - top - 1)) off=0 i row=$((top + 1))
+    [ "$TUI_SEL" -ge "$cap" ] && off=$((TUI_SEL - cap + 1))
+    for ((i = off; i < ${#T_NAMES[@]} && row < bot; i++, row++)); do
+        local n="${T_NAMES[i]}" fl dot label
+        fl="$(flags_for "$n")"
+        if [ "$(pack_field "$n" 7)" = "retired" ]; then dot="${DIM}●${RESET}"
+        elif [[ "$fl" == *PUFFY* || "$fl" == *"high IR"* ]]; then dot="${RED}●${RESET}"
+        elif [ -n "$fl" ]; then dot="${YELLOW}●${RESET}"
+        else dot="${GREEN}●${RESET}"
+        fi
+        label="$(printf '%-14.14s %2sS %5s' "$n" "$(pack_field "$n" 2)" "$(pack_field "$n" 3)")"
+        if [ "$i" -eq "$TUI_SEL" ]; then
+            put "$row" 3 "${BOLD}${BLUE}❯${RESET} ${dot} ${BOLD}${label}${RESET}"
+        else
+            put "$row" 3 "  ${dot} ${DIM}${label}${RESET}"
+        fi
+    done
+    [ "${#T_NAMES[@]}" -eq 0 ] && put $((top + 1)) 3 "${DIM}no packs yet${RESET}"
+
+    # details
+    if [ "${#T_NAMES[@]}" -gt 0 ]; then
+        local sel="${T_NAMES[TUI_SEL]}" cells mah crating brand added status puffy r2=$((top + 1))
+        IFS=$'\t' read -r _ cells mah crating brand added status puffy <<< "$(pack_row "$sel")"
+        put "$r2" "$c" "${BOLD}${sel}${RESET}  ${DIM}${cells}S ${mah}mAh${RESET}"; r2=$((r2 + 2))
+        put "$r2" "$c" "${DIM}brand${RESET}     $brand   ${DIM}c rating${RESET} $crating"; r2=$((r2 + 1))
+        put "$r2" "$c" "${DIM}age${RESET}       $(days_ago "$added")d   ${DIM}cycles${RESET} $(count_events "$sel" charge)   ${DIM}flights${RESET} $(count_events "$sel" fly)"; r2=$((r2 + 1))
+        put "$r2" "$c" "${DIM}status${RESET}    $status$( [ "$puffy" = 1 ] && printf '%s' " ${RED}(puffy)${RESET}" )"; r2=$((r2 + 1))
+        local ir; ir="$(latest_ir "$sel")"
+        if [ -n "$ir" ]; then
+            put "$r2" "$c" "${DIM}last ir${RESET}   $ir mΩ ${DIM}(avg $(ir_avg "$ir"), worst $(ir_max "$ir"))${RESET}"; r2=$((r2 + 1))
+        fi
+        local fl; fl="$(flags_for "$sel")"
+        if [ -n "$fl" ]; then
+            put "$r2" "$c" "${DIM}warnings${RESET}  $fl"; r2=$((r2 + 1))
+        fi
+        r2=$((r2 + 1))
+        local avail=$((bot - r2 - 1))
+        if [ "$avail" -gt 0 ]; then
+            put "$r2" "$c" "${BOLD}recent:${RESET}"; r2=$((r2 + 1))
+            local epoch _n type value note
+            while IFS=$'\t' read -r epoch _n type value note; do
+                put "$r2" "$c" "${DIM}$(date -d "@$epoch" '+%m-%d %H:%M')${RESET}  $(printf '%-7s' "$type") $value${note:+ ${DIM}$(printf '%.28s' "$note")${RESET}}"
+                r2=$((r2 + 1))
+            done < <(awk -F'\t' -v n="$sel" '$2 == n' "$EVENTS" | tail -n $((avail - 1)))
+        fi
+    else
+        put $((top + 1)) "$c" "press ${BOLD}${BLUE}a${RESET} to add your first pack"
+    fi
+
+    [ -n "$TUI_MSG" ] && put $((ROWS - 1)) 2 "$TUI_MSG"
+    put "$ROWS" 2 "$(hint j/k nav; hint c charge; hint f fly; hint s storage; hint i ir; hint n note; hint p puffy; hint a add; hint r retire; hint d retired; hint q quit)"
+    printf '%s' "$OUT"
+}
+
+tui_prompt() {  # question -> $REPLY
+    local ROWS; ROWS=$(tput lines)
+    printf '\033[%d;2H\033[2K%s ' "$((ROWS - 1))" "${BOLD}${BLUE}?${RESET} ${BOLD}$1${RESET}"
+    tput cnorm; stty echo
+    IFS= read -r REPLY || REPLY=""
+    tput civis; stty -echo
+}
+
+cmd_tui() {
+    [ -t 1 ] || usage
+    exec < /dev/tty
+    local stty_orig; stty_orig="$(stty -g)"
+    tput smcup; tput civis; stty -echo
+    trap "stty $stty_orig; printf '\\033[?7h'; tput cnorm; tput rmcup" EXIT
+    trap : WINCH
+    local key k2 sel REPLY
+    while :; do
+        tui_load
+        tui_draw
+        IFS= read -rsn1 key || { TUI_MSG=""; continue; }
+        if [ "$key" = $'\033' ]; then
+            k2=""; IFS= read -rsn2 -t 0.05 k2 || true
+            key+="$k2"
+        fi
+        TUI_MSG=""
+        sel=""
+        [ "${#T_NAMES[@]}" -gt 0 ] && sel="${T_NAMES[TUI_SEL]}"
+        case "$key" in
+            q|Q) break ;;
+            j|$'\033[B') [ "$TUI_SEL" -lt $(( ${#T_NAMES[@]} - 1 )) ] && TUI_SEL=$((TUI_SEL + 1)) ;;
+            k|$'\033[A') [ "$TUI_SEL" -gt 0 ] && TUI_SEL=$((TUI_SEL - 1)) ;;
+            g) TUI_SEL=0 ;;
+            G) TUI_SEL=$(( ${#T_NAMES[@]} - 1 )); [ "$TUI_SEL" -lt 0 ] && TUI_SEL=0 ;;
+            d) TUI_ALL=$((1 - TUI_ALL)) ;;
+            c) if [ -n "$sel" ]; then
+                   log_event "$sel" charge
+                   TUI_MSG="${GREEN}::${RESET} charged ${BOLD}$sel${RESET} (cycle $(count_events "$sel" charge))"
+               fi ;;
+            f) if [ -n "$sel" ]; then
+                   tui_prompt "flight minutes for $sel (empty = unknown):"
+                   case "$REPLY" in
+                       *[!0-9]*) TUI_MSG="${RED}::${RESET} not a number, flight not logged" ;;
+                       *) log_event "$sel" fly "$REPLY"
+                          TUI_MSG="${GREEN}::${RESET} logged flight on ${BOLD}$sel${RESET}" ;;
+                   esac
+               fi ;;
+            s) if [ -n "$sel" ]; then
+                   log_event "$sel" storage
+                   TUI_MSG="${GREEN}::${RESET} ${BOLD}$sel${RESET} in storage, good pilot"
+               fi ;;
+            i) if [ -n "$sel" ]; then
+                   local cells bad joined r
+                   cells="$(pack_field "$sel" 2)"
+                   tui_prompt "IR for $sel in mΩ, $cells readings (e.g. 8.2 8.5 ...):"
+                   local -a irs=()
+                   read -ra irs <<< "$REPLY" || true
+                   bad=""
+                   for r in "${irs[@]}"; do case "$r" in ''|*[!0-9.]*) bad=1 ;; esac; done
+                   if [ -n "$bad" ] || [ "${#irs[@]}" -ne "$cells" ]; then
+                       TUI_MSG="${RED}::${RESET} expected $cells numeric readings, got ${#irs[@]}"
+                   else
+                       joined="$(IFS=,; printf '%s' "${irs[*]}")"
+                       log_event "$sel" ir "$joined"
+                       TUI_MSG="${GREEN}::${RESET} IR logged: avg $(ir_avg "$joined")mΩ, worst $(ir_max "$joined")mΩ"
+                   fi
+               fi ;;
+            n) if [ -n "$sel" ]; then
+                   tui_prompt "note for $sel:"
+                   if [ -n "$REPLY" ]; then
+                       log_event "$sel" note "" "$REPLY"
+                       TUI_MSG="${GREEN}::${RESET} noted"
+                   fi
+               fi ;;
+            p) if [ -n "$sel" ]; then
+                   set_pack_field "$sel" 8 1
+                   log_event "$sel" puffy
+                   TUI_MSG="${YELLOW}::${RESET} ${BOLD}$sel${RESET} flagged puffy"
+               fi ;;
+            a) tui_prompt "add pack: <name> <cells> <mah> [c-rating] [brand]"
+               local an ac am acr ab extra
+               read -r an ac am acr ab extra <<< "$REPLY" || true
+               if [ -z "${am:-}" ]; then
+                   [ -n "$REPLY" ] && TUI_MSG="${RED}::${RESET} need at least: name cells mah"
+               elif ! [[ "$an" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                   TUI_MSG="${RED}::${RESET} names: letters, numbers, - and _ only"
+               elif pack_exists "$an"; then
+                   TUI_MSG="${RED}::${RESET} pack '$an' already exists"
+               elif [[ "$ac" =~ [^0-9] || "$am" =~ [^0-9] ]]; then
+                   TUI_MSG="${RED}::${RESET} cells and mah must be numbers"
+               else
+                   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                       "$an" "$ac" "$am" "${acr:--}" "${ab:--}" "$(now)" "active" "0" >> "$PACKS"
+                   TUI_MSG="${GREEN}::${RESET} added ${BOLD}$an${RESET} (${ac}S ${am}mAh)"
+               fi ;;
+            r) if [ -n "$sel" ]; then
+                   tui_prompt "retire $sel? [y/N]"
+                   case "$REPLY" in
+                       y|Y|yes) set_pack_field "$sel" 7 retired; log_event "$sel" retire
+                                TUI_MSG="${GREEN}::${RESET} ${BOLD}$sel${RESET} retired o7" ;;
+                       *) TUI_MSG="${DIM}not retired${RESET}" ;;
+                   esac
+               fi ;;
+        esac
+    done
+}
+
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
-    -h|--help|"") usage ;;
+    -h|--help) usage ;;
+    ""|tui)   cmd_tui ;;
     add)      cmd_add "$@" ;;
     charge)   [ $# -ge 1 ] || die "usage: cellmate charge <pack>"; cmd_charge "$@" ;;
     fly)      [ $# -ge 1 ] || die "usage: cellmate fly <pack> [minutes]"; cmd_fly "$@" ;;

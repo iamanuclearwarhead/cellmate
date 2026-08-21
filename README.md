@@ -18,6 +18,12 @@ lipos die quietly, cycles add up and the internal resistance increases. which is
 ## usage
 
 ```bash
+cellmate                           # opens the full-screen tui (btop style, q to quit)
+```
+
+or do everything from the cli:
+
+```bash
 cellmate add tattu-r-line -s 6 -c 1300 -C 150 -b Tattu   # new pack: 6S 1300mAh
 cellmate charge tattu-r-line       # log a charge (counts a cycle)
 cellmate fly tattu-r-line 4        # log a flight (4 minutes)
