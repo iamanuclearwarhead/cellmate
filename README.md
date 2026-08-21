@@ -41,18 +41,6 @@ install -Dm755 cellmate ~/.local/bin/cellmate
 
 > make sure `~/.local/bin` is on your `$PATH`
 
-tab completions for bash zsh and fish can be found in  `completions/` — copy the one for your shell:
-
-```bash
-# fish
-cp completions/cellmate.fish ~/.config/fish/completions/
-
-# bash
-cp completions/cellmate.bash ~/.local/share/bash-completion/completions/cellmate
-
-# zsh: drop completions/_cellmate anywhere in your $fpath
-```
-
 ## data
 
 everything is stored in two greppable tsv files under `~/.local/share/cellmate/` (`packs.tsv` and `events.tsv`). you can back them, up sync them, `awk` them
