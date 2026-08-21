@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+#
+#         _ _            _
+#  __ ___| | |_ __  __ _| |_ ___
+# / _/ -_) | | '  \/ _` |  _/ -_)
+# \__\___|_|_|_|_|_\__,_|\__\___|
+#
+#  keep your lipos alive         by @iamanuclearwarhead
+#
+# usage
+#   cellmate add <pack> -s <cells> -c <mah> [-C <c-rating>] [-b <brand>]
+#   cellmate charge <pack>                        log a charge (counts a cycle)
+#   cellmate fly <pack> [minutes]                 log a flight
+#   cellmate storage <pack>                       log putting the pack in storage
+#   cellmate ir <pack> <mohm> [mohm ...]          log per-cell internal resistance
+#   cellmate puffy <pack>                         flag a pack as puffy
+#   cellmate note <pack> <text>                   attach a note
+#   cellmate list [-a]                            list packs (-a includes retired)
+#   cellmate show <pack>                          pack details and history
+#   cellmate retire <pack>                        retire a pack
+#   cellmate stats                                fleet totals
+set -euo pipefail
+
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cellmate"
+PACKS="$DATA_DIR/packs.tsv"
+EVENTS="$DATA_DIR/events.tsv"
+
+BOLD=$'\033[1m'
+BLUE=$'\033[34m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+RED=$'\033[31m'
+DIM=$'\033[90m'
+RESET=$'\033[0m'
+
+info()  { printf '%s\n' "${BLUE}::${RESET} $*"; }
+ok()    { printf '%s\n' "${GREEN}::${RESET} $*"; }
+warn()  { printf '%s\n' "${YELLOW}::${RESET} $*"; }
+die()   { printf '%s\n' "${RED}error:${RESET} $*" >&2; exit 1; }
+
+usage() {
+    sed -n '2,/^set -euo/p' "$0" | head -n -1 | sed 's/^# \{0,1\}//'
+    exit 0
+}
+
+mkdir -p "$DATA_DIR"
+touch "$PACKS" "$EVENTS"
+
+# packs.tsv:  name  cells  mah  c_rating  brand  added_epoch  status  puffy
+# events.tsv: epoch  name  type  value  note
+
+now() { date +%s; }
+
+pack_row() { awk -F'\t' -v n="$1" '$1 == n' "$PACKS"; }
+
+pack_exists() { [ -n "$(pack_row "$1")" ]; }
+
+require_pack() {
+    pack_exists "$1" || die "no pack named '$1' (see: cellmate list)"
+}
+
+pack_field() { pack_row "$1" | cut -f"$2"; }
+
+set_pack_field() {  # name, column, value
+    local tmp
+    tmp="$(mktemp)"
+    awk -F'\t' -v OFS='\t' -v n="$1" -v col="$2" -v val="$3" \
+        '$1 == n { $col = val } { print }' "$PACKS" > "$tmp"
+    mv "$tmp" "$PACKS"
+}
+
+log_event() {  # name, type, value, note
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(now)" "$1" "$2" "${3:-}" "${4:-}" >> "$EVENTS"
+}
+
+count_events() { awk -F'\t' -v n="$1" -v t="$2" '$2 == n && $3 == t' "$EVENTS" | wc -l; }
+
+last_event() {  # name -> "epoch type" of the most recent charge/fly/storage event
+    awk -F'\t' -v n="$1" '$2 == n && ($3 == "charge" || $3 == "fly" || $3 == "storage") \
+        { e = $1; t = $3 } END { if (e) print e, t }' "$EVENTS"
+}
+
+latest_ir() {  # name -> most recent comma-joined mohm readings
+    awk -F'\t' -v n="$1" '$2 == n && $3 == "ir" { v = $4 } END { print v }' "$EVENTS"
+}
+
+ir_avg() { printf '%s' "$1" | awk -F',' '{ s = 0; for (i = 1; i <= NF; i++) s += $i; printf "%.1f", s / NF }'; }
+ir_max() { printf '%s' "$1" | awk -F',' '{ m = 0; for (i = 1; i <= NF; i++) if ($i > m) m = $i; printf "%.1f", m }'; }
+
+days_ago() { awk -v t="$1" -v n="$(now)" 'BEGIN { printf "%d", (n - t) / 86400 }'; }
+
+flags_for() {  # name -> space-separated warning flags
+    local name="$1" out="" ir last
+    [ "$(pack_field "$name" 8)" = "1" ] && out+="${RED}PUFFY${RESET} "
+    ir="$(latest_ir "$name")"
+    if [ -n "$ir" ]; then
+        awk -v m="$(ir_max "$ir")" 'BEGIN { exit !(m >= 15) }' && out+="${RED}high IR${RESET} " \
+            || { awk -v m="$(ir_max "$ir")" 'BEGIN { exit !(m >= 10) }' && out+="${YELLOW}IR rising${RESET} "; }
+    fi
+    last="$(last_event "$name")"
+    if [ -n "$last" ] && [ "${last##* }" = "charge" ]; then
+        local d; d="$(days_ago "${last%% *}")"
+        [ "$d" -ge 3 ] && out+="${YELLOW}sitting full ${d}d${RESET} "
+    fi
+    [ "$(count_events "$name" charge)" -ge 150 ] && out+="${YELLOW}150+ cycles${RESET} "
+    printf '%s' "$out"
+}
+
+cmd_add() {
+    local name="${1:-}"; shift || true
+    [ -n "$name" ] || die "usage: cellmate add <pack> -s <cells> -c <mah> [-C <c-rating>] [-b <brand>]"
+    case "$name" in *[!a-zA-Z0-9_-]*) die "pack names: letters, numbers, - and _ only" ;; esac
+    pack_exists "$name" && die "pack '$name' already exists"
+    local cells="" mah="" crating="-" brand="-"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -s) cells="${2:-}"; shift 2 ;;
+            -c) mah="${2:-}"; shift 2 ;;
+            -C) crating="${2:-}"; shift 2 ;;
+            -b) brand="${2:-}"; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+    case "$cells" in ''|*[!0-9]*) die "-s <cells> is required (e.g. -s 4 for 4S)" ;; esac
+    case "$mah" in ''|*[!0-9]*) die "-c <mah> is required (e.g. -c 1500)" ;; esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$name" "$cells" "$mah" "$crating" "$brand" "$(now)" "active" "0" >> "$PACKS"
+    ok "added ${BOLD}$name${RESET} (${cells}S ${mah}mAh)"
+}
+
+cmd_charge() {
+    require_pack "$1"
+    log_event "$1" charge
+    ok "charged ${BOLD}$1${RESET} ${DIM}(cycle $(count_events "$1" charge))${RESET}"
+}
+
+cmd_fly() {
+    require_pack "$1"
+    local mins="${2:-}"
+    case "$mins" in *[!0-9]*) die "minutes must be a number" ;; esac
+    log_event "$1" fly "$mins"
+    ok "logged flight on ${BOLD}$1${RESET}${mins:+ ${DIM}(${mins}min)${RESET}}"
+}
+
+cmd_storage() {
+    require_pack "$1"
+    log_event "$1" storage
+    ok "${BOLD}$1${RESET} in storage, good pilot"
+}
+
+cmd_ir() {
+    local name="${1:-}"; shift || true
+    require_pack "$name"
+    [ $# -gt 0 ] || die "usage: cellmate ir <pack> <mohm> [mohm ...]  (one reading per cell)"
+    local cells; cells="$(pack_field "$name" 2)"
+    [ $# -eq "$cells" ] || die "$name is ${cells}S, expected $cells readings, got $#"
+    local r; for r in "$@"; do
+        case "$r" in ''|*[!0-9.]*) die "readings are numbers in mohm, got: $r" ;; esac
+    done
+    local joined; joined="$(IFS=,; printf '%s' "$*")"
+    log_event "$name" ir "$joined"
+    ok "logged IR for ${BOLD}$name${RESET}: avg $(ir_avg "$joined")mΩ, worst cell $(ir_max "$joined")mΩ"
+}
+
+cmd_puffy() {
+    require_pack "$1"
+    set_pack_field "$1" 8 1
+    log_event "$1" puffy
+    warn "${BOLD}$1${RESET} flagged puffy, keep an eye on it (or retire it)"
+}
+
+cmd_note() {
+    local name="${1:-}"; shift || true
+    require_pack "$name"
+    [ $# -gt 0 ] || die "usage: cellmate note <pack> <text>"
+    log_event "$name" note "" "$*"
+    ok "noted"
+}
+
+cmd_retire() {
+    require_pack "$1"
+    set_pack_field "$1" 7 retired
+    log_event "$1" retire
+    ok "${BOLD}$1${RESET} retired o7  ${DIM}(discharge fully and recycle it properly)${RESET}"
+}
+
+cmd_list() {
+    local show_all="${1:-}"
+    [ -s "$PACKS" ] || die "no packs yet (cellmate add <pack> -s 4 -c 1500)"
+    printf '%s\n' "${BOLD}your packs:${RESET}"
+    local name cells mah crating brand added status puffy
+    while IFS=$'\t' read -r name cells mah crating brand added status puffy; do
+        [ "$status" = "retired" ] && [ "$show_all" != "-a" ] && continue
+        local cycles ir irtxt="" agetxt style=""
+        cycles="$(count_events "$name" charge)"
+        ir="$(latest_ir "$name")"
+        [ -n "$ir" ] && irtxt="$(ir_avg "$ir")mΩ"
+        agetxt="$(days_ago "$added")d"
+        [ "$status" = "retired" ] && style="$DIM"
+        printf '  %s%-14s %4sS %6smAh  %3s cycles  %6s  %4s%s  %s\n' \
+            "$style$BOLD" "$name" "$cells" "$mah" "$cycles" "${irtxt:--}" "$agetxt" "$RESET" \
+            "$([ "$status" = "retired" ] && printf '%s' "${DIM}retired${RESET}" || flags_for "$name")"
+    done < "$PACKS"
+}
+
+cmd_show() {
+    require_pack "$1"
+    local name="$1"
+    IFS=$'\t' read -r _ cells mah crating brand added status puffy <<< "$(pack_row "$name")"
+    printf '%s\n' "${BOLD}$name${RESET}  ${DIM}${cells}S ${mah}mAh${RESET}"
+    printf '  %-10s %s\n' "brand" "$brand"
+    printf '  %-10s %s\n' "c rating" "$crating"
+    printf '  %-10s %s days\n' "age" "$(days_ago "$added")"
+    printf '  %-10s %s\n' "cycles" "$(count_events "$name" charge)"
+    printf '  %-10s %s\n' "flights" "$(count_events "$name" fly)"
+    printf '  %-10s %s\n' "status" "$status$( [ "$puffy" = 1 ] && printf '%s' " ${RED}(puffy)${RESET}")"
+    local ir; ir="$(latest_ir "$name")"
+    [ -n "$ir" ] && printf '  %-10s %s %s(avg %smΩ)%s\n' "last IR" "$ir" "$DIM" "$(ir_avg "$ir")" "$RESET"
+    local flags; flags="$(flags_for "$name")"
+    [ -n "$flags" ] && printf '  %-10s %s\n' "warnings" "$flags"
+    printf '\n%s\n' "${BOLD}recent history:${RESET}"
+    awk -F'\t' -v n="$name" '$2 == n' "$EVENTS" | tail -10 | \
+        while IFS=$'\t' read -r epoch _ type value note; do
+            printf '  %s%s%s  %-8s %s %s\n' "$DIM" "$(date -d "@$epoch" '+%Y-%m-%d %H:%M')" "$RESET" \
+                "$type" "$value" "${note:+$DIM$note$RESET}"
+        done
+}
+
+cmd_stats() {
+    [ -s "$PACKS" ] || die "no packs yet"
+    local total active retired cycles flights mins
+    total="$(wc -l < "$PACKS")"
+    retired="$(awk -F'\t' '$7 == "retired"' "$PACKS" | wc -l)"
+    active=$((total - retired))
+    cycles="$(awk -F'\t' '$3 == "charge"' "$EVENTS" | wc -l)"
+    flights="$(awk -F'\t' '$3 == "fly"' "$EVENTS" | wc -l)"
+    mins="$(awk -F'\t' '$3 == "fly" && $4 != "" { s += $4 } END { print s + 0 }' "$EVENTS")"
+    printf '%s\n' "${BOLD}fleet stats:${RESET}"
+    printf '  %-14s %s active, %s retired\n' "packs" "$active" "$retired"
+    printf '  %-14s %s\n' "total cycles" "$cycles"
+    printf '  %-14s %s%s\n' "total flights" "$flights" "${mins:+ (${mins}min logged)}"
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+    -h|--help|"") usage ;;
+    add)      cmd_add "$@" ;;
+    charge)   [ $# -ge 1 ] || die "usage: cellmate charge <pack>"; cmd_charge "$@" ;;
+    fly)      [ $# -ge 1 ] || die "usage: cellmate fly <pack> [minutes]"; cmd_fly "$@" ;;
+    storage)  [ $# -ge 1 ] || die "usage: cellmate storage <pack>"; cmd_storage "$@" ;;
+    ir)       cmd_ir "$@" ;;
+    puffy)    [ $# -ge 1 ] || die "usage: cellmate puffy <pack>"; cmd_puffy "$@" ;;
+    note)     cmd_note "$@" ;;
+    list)     cmd_list "${1:-}" ;;
+    show)     [ $# -ge 1 ] || die "usage: cellmate show <pack>"; cmd_show "$@" ;;
+    retire)   [ $# -ge 1 ] || die "usage: cellmate retire <pack>"; cmd_retire "$@" ;;
+    stats)    cmd_stats ;;
+    *)        die "unknown command: $cmd (try --help)" ;;
+esac

@@ -1,0 +1,38 @@
+#compdef cellmate
+# zsh completion for cellmate
+
+_cellmate() {
+    local -a cmds packs
+    cmds=(
+        'add:add a new pack'
+        'charge:log a charge (counts a cycle)'
+        'fly:log a flight'
+        'storage:log putting the pack in storage'
+        'ir:log per-cell internal resistance'
+        'puffy:flag a pack as puffy'
+        'note:attach a note'
+        'list:list packs'
+        'show:pack details and history'
+        'retire:retire a pack'
+        'stats:fleet totals'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe 'command' cmds
+        return
+    fi
+
+    local packs_file="${XDG_DATA_HOME:-$HOME/.local/share}/cellmate/packs.tsv"
+    [[ -f $packs_file ]] && packs=(${(f)"$(cut -f1 $packs_file)"})
+
+    case $words[2] in
+        charge|fly|storage|ir|puffy|note|show|retire)
+            (( CURRENT == 3 )) && _describe 'pack' packs
+            ;;
+        list)
+            _arguments '-a[include retired packs]'
+            ;;
+    esac
+}
+
+_cellmate "$@"
